@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.myapplication'
+    namespace 'megvii.testfacepass'
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.myapplication"
+        applicationId "megvii.testfacepass"
         minSdk 30
         targetSdk 36
         versionCode 1
@@ -41,12 +41,10 @@ android {
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation(name: 'lib_ocr_zs2-release', ext: 'aar')
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
     implementation libs.androidx.appcompat
 
     implementation libs.androidx.core.ktx
-    implementation libs.androidx.lifecycle.runtime.ktx
     implementation libs.androidx.activity.compose
     implementation platform(libs.androidx.compose.bom)
     implementation libs.androidx.ui
@@ -60,6 +58,4 @@ dependencies {
     androidTestImplementation libs.androidx.ui.test.junit4
     debugImplementation libs.androidx.ui.tooling
     debugImplementation libs.androidx.ui.test.manifest
-
-
 }

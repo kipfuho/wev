@@ -1,4 +1,4 @@
-package com.example.myapplication.ui.theme
+package megvii.testfacepass.ui.theme
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Tab
@@ -10,8 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import com.example.myapplication.model.SdkDemo
-import com.example.myapplication.ui.SdkDemoContent
+import megvii.testfacepass.model.SdkDemo
+import megvii.testfacepass.ui.SdkDemoContent
 
 @Composable
 fun SdkDemoScreen(demos: List<SdkDemo>, modifier: Modifier = Modifier) {

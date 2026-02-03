@@ -1,4 +1,4 @@
-package com.example.myapplication
+package com.grg.vietnamocr
 
 import org.junit.Test
 
