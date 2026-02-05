@@ -31,6 +31,12 @@ class OcrResult {
         var no by mutableStateOf("")
         var birthDate by mutableStateOf("")
         var expiryDate by mutableStateOf("")
+
+        fun reset() {
+            no = ""
+            birthDate = ""
+            expiryDate = ""
+        }
     }
 }
 
@@ -131,6 +137,7 @@ class OcrController(private val context: Context) {
                     val uriString = result.data?.getStringExtra("image_path")
                     if (!uriString.isNullOrEmpty()) {
                         bitmap = loadBitmapFromUri(context, uriString)
+                        OcrResult.reset()
                     }
                 }
             }
@@ -140,6 +147,7 @@ class OcrController(private val context: Context) {
             rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                 uri?.let {
                     bitmap = uriToBitmap(context, it)
+                    OcrResult.reset()
                 }
             }
 
@@ -197,7 +205,8 @@ class OcrController(private val context: Context) {
                 }
                 if (detectRunning) {
                     Text(text = ocrText)
-                } else if (bitmap != null) {
+                }
+                if (!OcrResult.no.isEmpty()) {
                     Text(text = "Số CCCD: ${OcrResult.no}")
                     Text(text = "Ngày sinh: ${OcrResult.birthDate}")
                     Text(text = "Hạn SD: ${OcrResult.expiryDate}")

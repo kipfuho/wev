@@ -3,13 +3,15 @@ package megvii.testfacepass.controller
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Base64
+import android.util.Log
 import androidx.compose.foundation.Image
-import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
@@ -18,6 +20,19 @@ import androidx.compose.ui.unit.dp
 import com.crt.Crt900x
 import com.crt.c900xtools.MtDefault
 import kotlinx.coroutines.*
+import net.sf.scuba.smartcards.CardService
+import net.sf.scuba.smartcards.CardServiceException
+import net.sf.scuba.smartcards.CommandAPDU
+import net.sf.scuba.smartcards.ResponseAPDU
+import org.jmrtd.BACKey
+import org.jmrtd.BACKeySpec
+import org.jmrtd.PassportService
+import org.jmrtd.lds.SODFile
+import org.jmrtd.lds.icao.COMFile
+import java.io.ByteArrayInputStream
+import java.lang.Exception
+import java.util.Arrays
+
 
 object Utils {
 
@@ -178,6 +193,64 @@ object Utils {
     }
 }
 
+class CrtCardService(
+    private val reader: Crt900x
+) : CardService() {
+
+    override fun open() {
+        // Reader already opened via CrtReaderConnect()
+        // Nothing to do here
+    }
+
+    override fun isOpen(): Boolean {
+        TODO("Not yet implemented")
+    }
+
+    override fun getATR(): ByteArray? {
+        TODO("Not yet implemented")
+    }
+
+    override fun close() {
+        reader.CrtReaderDisConnect()
+    }
+
+    override fun isConnectionLost(e: Exception?): Boolean {
+        TODO("Not yet implemented")
+    }
+
+    @Throws(CardServiceException::class)
+    // MODIFIED to accept nullable CommandAPDU and return nullable ResponseAPDU
+    override fun transmit(commandAPDU: CommandAPDU?): ResponseAPDU? {
+        // Add a check for a null commandAPDU
+        if (commandAPDU == null) {
+            throw CardServiceException("CommandAPDU cannot be null")
+            // Or alternatively, return null if that's a valid scenario:
+            // return null
+        }
+
+        val cmd = commandAPDU.bytes
+        Log.i("CrtCardService", "Transmit: ${Utils.bytes2HexStr(cmd, cmd.size, true)}")
+
+        val responseBuffer = ByteArray(4096)
+        val responseLength = IntArray(1)
+
+        val ret = reader.CrtSendAPDU(
+            'A',           // slot (usually 0)
+            cmd.size,
+            cmd,
+            responseLength,
+            responseBuffer
+        )
+
+        if (ret != 0) {
+            throw CardServiceException("CrtSendAPDU failed, ret=$ret")
+        }
+
+        val resp = Arrays.copyOf(responseBuffer, responseLength[0])
+        return ResponseAPDU(resp)
+    }
+}
+
 class Crt900xController(context: Context) {
 
     /* ================= CORE ================= */
@@ -194,7 +267,11 @@ class Crt900xController(context: Context) {
     var faceBitmap by mutableStateOf<Bitmap?>(null)
         private set
 
+    var apduCommand by mutableStateOf("00 A4 04 00 07 A0 00 00 02 47 10 01")
+        private set
+
     private fun log(msg: String) {
+        Log.i("Crt900xController", msg)
         testResult += msg + "\n"
     }
 
@@ -273,6 +350,16 @@ class Crt900xController(context: Context) {
                 reader.CrtReaderRFRelease()
             }
             log("RF Release: $ret")
+        }
+    }
+
+    fun crtReaderRFReset() {
+        scope.launch {
+            val ret = withContext(Dispatchers.IO) {
+                val out = ByteArray(64)
+                reader.CrtReaderReset(out)
+            }
+            log("RF Reset: $ret")
         }
     }
 
@@ -421,6 +508,138 @@ class Crt900xController(context: Context) {
         }
     }
 
+    fun crtReaderAPDUTypeA() {
+        scope.launch(Dispatchers.IO) {
+            val hexCmds = Utils.trimAll(apduCommand)
+            val cmds = Utils.hexStr2ByteArrs(hexCmds)
+            val respLen = IntArray(1)
+            val resp = ByteArray(256)
+
+            val execRet = reader.CrtSendAPDU(
+                'A',
+                cmds.size,
+                cmds,
+                respLen,
+                resp
+            )
+
+            withContext(Dispatchers.Main) {
+                if (execRet == 0) {
+                    log(
+                        "Recv : ${
+                            Utils.bytes2HexStrExpend(resp, respLen[0], true)
+                        }\n"
+                    )
+                } else {
+                    val err = ByteArray(128)
+                    reader.CrtGetLastError(err)
+                    log("Error: ${String(err)}\n")
+                }
+            }
+        }
+    }
+
+    fun crtReaderAPDUTypeB() {
+        scope.launch(Dispatchers.IO) {
+            val hexCmds = Utils.trimAll(apduCommand)
+            val cmds = Utils.hexStr2ByteArrs(hexCmds)
+            val respLen = IntArray(1)
+            val resp = ByteArray(256)
+
+            val execRet = reader.CrtSendAPDU(
+                'B',
+                cmds.size,
+                cmds,
+                respLen,
+                resp
+            )
+
+            withContext(Dispatchers.Main) {
+                if (execRet == 0) {
+                    log(
+                        "Recv : ${
+                            Utils.bytes2HexStrExpend(resp, respLen[0], true)
+                        }\n"
+                    )
+                } else {
+                    val err = ByteArray(128)
+                    reader.CrtGetLastError(err)
+                    log("Error: ${String(err)}\n")
+                }
+            }
+        }
+    }
+
+    fun getCOMandSOD() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                log("Starting BAC")
+
+                val bacKey: BACKeySpec = BACKey(
+                    OcrResult.no,
+                    OcrResult.birthDate,
+                    OcrResult.expiryDate
+                )
+
+                reader.CrtReaderRFRelease()
+                Thread.sleep(150)
+                reader.CrtReaderRFActive(ByteArray(1))
+                Thread.sleep(150)
+
+                // select eMRTD application AID
+                val hexCmds = Utils.trimAll("00 A4 04 00 07 A0 00 00 02 47 10 01")
+                val cmds = Utils.hexStr2ByteArrs(hexCmds)
+                val respLen = IntArray(1)
+                val resp = ByteArray(256)
+
+                reader.CrtSendAPDU(
+                    'A',
+                    cmds.size,
+                    cmds,
+                    respLen,
+                    resp
+                )
+
+                val cardService = CrtCardService(reader)
+
+                val passportService = PassportService(
+                    cardService,
+                    256,
+                    256,
+                    224,
+                    false,
+                    true
+                )
+
+
+                passportService.open()
+                passportService.doBAC(bacKey)
+                log("BAC SUCCESS")
+                passportService.sendSelectApplet(true)
+                // ---- EF.COM ----
+                val comStream = passportService.getInputStream(PassportService.EF_COM)
+                val comBytes = comStream.readBytes()
+                comStream.close()
+
+                // Base64 output (THIS matches your example)
+                val comBase64 = Base64.encodeToString(comBytes, Base64.NO_WRAP)
+                log("COM: $comBase64")
+
+                // ---- EF.SOD ----
+                @Suppress("DEPRECATION")
+                val sodStream = passportService.getInputStream(PassportService.EF_SOD)
+                val sodBytes = sodStream.readBytes()
+                sodStream.close()
+
+                // Base64 output
+                val sodBase64 = Base64.encodeToString(sodBytes, Base64.NO_WRAP)
+                log("SOD: $sodBase64")
+            } catch (e: Exception) {
+                log("BAC FAILED, $e")
+            }
+        }
+    }
+
     /* ================= COMPOSE UI ================= */
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -475,6 +694,13 @@ class Crt900xController(context: Context) {
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("RF Release")
+                }
+
+                Button(
+                    onClick = { crtReaderRFReset() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("RF Reset")
                 }
             }
 
@@ -583,6 +809,33 @@ class Crt900xController(context: Context) {
                 }
 
                 Divider()
+            }
+
+            OutlinedTextField(
+                value = apduCommand,
+                onValueChange = { apduCommand = it },
+                label = { Text("APDU Command") }
+            )
+
+            Button(
+                onClick = { crtReaderAPDUTypeA() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Exec APDU Type A")
+            }
+
+            Button(
+                onClick = { crtReaderAPDUTypeB() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Exec APDU Type B")
+            }
+
+            Button(
+                onClick = { getCOMandSOD() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Read COM + SOD")
             }
 
             /* ================= OUTPUT ================= */
