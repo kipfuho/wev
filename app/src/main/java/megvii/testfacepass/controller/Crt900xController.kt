@@ -27,9 +27,6 @@ import net.sf.scuba.smartcards.ResponseAPDU
 import org.jmrtd.BACKey
 import org.jmrtd.BACKeySpec
 import org.jmrtd.PassportService
-import org.jmrtd.lds.SODFile
-import org.jmrtd.lds.icao.COMFile
-import java.io.ByteArrayInputStream
 import java.lang.Exception
 import java.util.Arrays
 
