@@ -1,5 +1,5 @@
 [versions]
-agp = "8.11.0-alpha10"
+agp = "8.11.2"
 appcompat = "1.7.1"
 bcprovJdk18on = "1.83"
 jmrtd = "0.8.3"

@@ -35,6 +35,7 @@ import org.jmrtd.lds.icao.COMFile
 import org.jmrtd.lds.icao.DG2File
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
 import java.util.Arrays
 
 
@@ -774,22 +775,36 @@ class Crt900xController(context: Context) {
 
                 // identity data object
                 val identityData = JSONObject()
+                val dg1Bytes = passportService
+                    .getInputStream(PassportService.EF_DG1)
+                    .use { it.readBytes() }
+                val mrzText = String(dg1Bytes, StandardCharsets.ISO_8859_1)
                 val dg13Bytes = passportService
                     .getInputStream(PassportService.EF_DG13)
                     .use { it.readBytes() }
                 val dg13Base64 = Base64.encodeToString(dg13Bytes,Base64.NO_WRAP);
-                val identityValues = IdentityDecoder.parse()
+                val identityValues = IdentityDecoder.parse(dg13Base64)
 
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
-                identityData.put("mrz", "")
+                identityData.put("mrz", mrzText)
+                identityData.put("cardNumber", identityValues[1]?.getOrNull(0))
+                identityData.put("name", identityValues[2]?.getOrNull(0))
+                identityData.put("dateOfBirth", identityValues[3]?.getOrNull(0))
+                identityData.put("sex", identityValues[4]?.getOrNull(0))
+                identityData.put("nationality", identityValues[6]?.getOrNull(0))
+                identityData.put("religion", identityValues[7]?.getOrNull(0))
+                identityData.put("hometown", identityValues[8]?.getOrNull(0))
+                identityData.put("address", identityValues[9]?.getOrNull(0))
+                identityData.put("issueDate", identityValues[11]?.getOrNull(0))
+                identityData.put("expireDate", identityValues[12]?.getOrNull(0))
+                identityData.put("fatherName", identityValues[13]?.getOrNull(0))
+                identityData.put("motherName", identityValues[13]?.getOrNull(1))
+                // 3 truong nay k ro la tag id nao
+//                identityData.put("partnerName", "")
+//                identityData.put("faceImage", "")
+//                identityData.put("previousNumber", "")
+
+                dataObject.put("identityData", identityData)
+                log(dataObject.toString(4))
             } catch (e: Exception) {
                 log("BAC FAILED, $e")
             }
