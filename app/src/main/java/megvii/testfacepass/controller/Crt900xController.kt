@@ -3,8 +3,10 @@ package megvii.testfacepass.controller
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.util.Base64
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -27,7 +29,12 @@ import net.sf.scuba.smartcards.ResponseAPDU
 import org.jmrtd.BACKey
 import org.jmrtd.BACKeySpec
 import org.jmrtd.PassportService
-import java.lang.Exception
+import org.jmrtd.lds.LDSFileUtil
+import org.jmrtd.lds.SODFile
+import org.jmrtd.lds.icao.COMFile
+import org.jmrtd.lds.icao.DG2File
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.util.Arrays
 
 
@@ -637,8 +644,165 @@ class Crt900xController(context: Context) {
         }
     }
 
+    fun dgNumberFromTag(tag: Int): Int = when (tag) {
+        0x61 -> 1
+        0x75 -> 2
+        0x63 -> 3
+        0x76 -> 4
+        in 0x65..0x70 -> tag - 0x60
+        else -> -1
+    }
+
+    fun normalizeDate(d: String): String {
+        val p = d.split("/")
+        return "${p[2]}/${p[1]}/${p[0]}"
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    fun getAllData() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                log("Starting BAC")
+
+                val bacKey: BACKeySpec = BACKey(
+                    OcrResult.no,
+                    OcrResult.birthDate,
+                    OcrResult.expiryDate
+                )
+
+                reader.CrtReaderRFRelease()
+                Thread.sleep(150)
+                reader.CrtReaderRFActive(ByteArray(1))
+                Thread.sleep(150)
+
+                // select eMRTD application AID
+                val hexCmds = Utils.trimAll("00 A4 04 00 07 A0 00 00 02 47 10 01")
+                val cmds = Utils.hexStr2ByteArrs(hexCmds)
+                val respLen = IntArray(1)
+                val resp = ByteArray(256)
+
+                reader.CrtSendAPDU(
+                    'A',
+                    cmds.size,
+                    cmds,
+                    respLen,
+                    resp
+                )
+
+                val cardService = CrtCardService(reader)
+
+                val passportService = PassportService(
+                    cardService,
+                    256,
+                    256,
+                    224,
+                    false,
+                    true
+                )
+
+
+                passportService.open()
+                passportService.doBAC(bacKey)
+                log("BAC SUCCESS")
+                passportService.sendSelectApplet(true)
+
+                val verifyObjectData = JSONObject()
+                val rawObject = JSONObject()
+                // ---- EF.COM ----
+                val comBytes = passportService
+                    .getInputStream(PassportService.EF_COM)
+                    .use { it.readBytes() }
+                val comFile = COMFile(ByteArrayInputStream(comBytes))
+                val comBase64 = Base64.encodeToString(comBytes, Base64.NO_WRAP)
+                log("COM: $comBase64")
+                rawObject.put("com", comBase64)
+
+                // ---- EF.SOD ----
+                @Suppress("DEPRECATION")
+                val sodBytes = passportService
+                    .getInputStream(PassportService.EF_SOD)
+                    .use { it.readBytes() }
+                val sodFile = SODFile(ByteArrayInputStream(sodBytes))
+                val sodBase64 = Base64.encodeToString(sodBytes, Base64.NO_WRAP)
+                log("SOD: $sodBase64")
+                rawObject.put("sod", sodBase64)
+
+                // ---- DG ----
+                val dgTags: IntArray = comFile.tagList
+                dgTags.forEach { tag ->
+                    val fid = LDSFileUtil.lookupFIDByTag(tag)
+
+                    if (tag == 0x63 || tag == 0x76) {
+                        log("Skipping EAC-protected DG: 0x${tag.toString(16)}")
+                        return@forEach
+                    }
+
+                    passportService.getInputStream(fid).use { dgIn ->
+                        val dgName = "dg${dgNumberFromTag(tag)}"
+                        val bytes = dgIn.readBytes()
+                        val dgBase64 = Base64.encodeToString(bytes,Base64.NO_WRAP)
+                        log("$dgName $dgBase64")
+                        rawObject.put(dgName, dgBase64)
+                    }
+                }
+
+                // general object data
+                verifyObjectData.put("raw", rawObject)
+                val dataObject = JSONObject()
+                val encodedVerifyObject = Base64.encodeToString(
+                    verifyObjectData.toString().toByteArray(Charsets.UTF_8),
+                    Base64.NO_WRAP
+                )
+                dataObject.put("dataVerifyObject", encodedVerifyObject)
+
+                // portrait
+                val dg2Bytes = passportService
+                    .getInputStream(PassportService.EF_DG2)
+                    .use { it.readBytes() }
+
+                val dg2File = DG2File(ByteArrayInputStream(dg2Bytes))
+                val faceImageInfo = dg2File.faceInfos[0].faceImageInfos[0]
+                val imageBytes = faceImageInfo.imageInputStream.use {
+                    it.readBytes()
+                }
+                dataObject.put("nfcPortrait", Base64.encodeToString(imageBytes,Base64.NO_WRAP))
+                val dgCertBase64 = Base64.encodeToString(
+                    sodFile.docSigningCertificate.encoded,
+                    Base64.NO_WRAP
+                )
+                dataObject.put("dgCert", dgCertBase64)
+
+                // identity data object
+                val identityData = JSONObject()
+                val dg13Bytes = passportService
+                    .getInputStream(PassportService.EF_DG13)
+                    .use { it.readBytes() }
+                val dg13Base64 = Base64.encodeToString(dg13Bytes,Base64.NO_WRAP);
+                val identityValues = IdentityDecoder.parse()
+
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+                identityData.put("mrz", "")
+            } catch (e: Exception) {
+                log("BAC FAILED, $e")
+            }
+        }
+    }
+
+    fun test() {
+        Log.i("Identity", ": ${IdentityDecoder.parse()}")
+    }
+
     /* ================= COMPOSE UI ================= */
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun Layout() {
@@ -670,6 +834,13 @@ class Crt900xController(context: Context) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Disconnect")
+            }
+
+            Button(
+                onClick = { test() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Test")
             }
 
             Divider()
@@ -833,6 +1004,13 @@ class Crt900xController(context: Context) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Read COM + SOD")
+            }
+
+            Button(
+                onClick = { getAllData() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Get all data")
             }
 
             /* ================= OUTPUT ================= */
